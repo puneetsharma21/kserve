@@ -5,6 +5,7 @@ on:
     # Publish `master` as Docker `latest` image.
     branches:
       - master
+      - sklearn-runtime-cache
 
     # Publish `v1.2.3` tags as releases.
     tags:
@@ -22,7 +23,6 @@ concurrency:
 
 jobs:
   # Run tests.
-  # See also https://docs.docker.com/docker-hub/builds/automated-testing/
   test:
     runs-on: ubuntu-latest
 
@@ -36,18 +36,29 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Cache Docker layers
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-docker-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-docker-
+
       - name: Run tests
         uses: docker/build-push-action@v5
         with:
-          platforms: linux/amd64, linux/arm64/v8, linux/ppc64le
+          platforms: linux/ppc64le
           context: python
           file: python/sklearn.Dockerfile
           push: false
+          # Use the cache for Docker layers
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
           # https://github.com/docker/buildx/issues/1533
           provenance: false
 
   # Push image to GitHub Packages.
-  # See also https://docs.docker.com/docker-hub/builds/
   push:
     # Ensure test job passes before pushing image.
     needs: test
@@ -82,21 +93,31 @@ jobs:
           VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
 
           # Strip "v" prefix from tag name
-          # [[ "${{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
-
-          # Use Docker `latest` tag convention
           [ "$VERSION" == "master" ] && VERSION=latest
 
           echo VERSION=$VERSION >> $GITHUB_ENV
           echo IMAGE_ID=$IMAGE_ID >> $GITHUB_ENV
 
+      # Cache Docker layers before push
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-docker-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-docker-
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          platforms: linux/amd64, linux/arm64/v8, linux/ppc64le
+          platforms: linux/ppc64le
           context: python
           file: python/sklearn.Dockerfile
           push: true
           tags: ${{ env.IMAGE_ID }}:${{ env.VERSION }}
+          # Use the cache for Docker layers
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
           # https://github.com/docker/buildx/issues/1533
           provenance: false
+
