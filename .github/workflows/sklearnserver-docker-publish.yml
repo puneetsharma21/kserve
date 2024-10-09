@@ -5,7 +5,7 @@ on:
     # Publish `master` as Docker `latest` image.
     branches:
       - master
-      - sklearn-runtime-cache
+      - sklearn-runtime-matrix-cache
 
     # Publish `v1.2.3` tags as releases.
     tags:
@@ -25,7 +25,9 @@ jobs:
   # Run tests.
   test:
     runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64/v8, linux/ppc64le]
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -36,34 +38,36 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Cache Docker layers
+      # Cache Docker layers using GitHub Actions caching
       - name: Cache Docker layers
         uses: actions/cache@v3
         with:
           path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-docker-${{ github.sha }}
+          key: ${{ runner.os }}-docker-${{ matrix.platform }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-docker-
+            ${{ runner.os }}-docker-${{ matrix.platform }}-
 
       - name: Run tests
         uses: docker/build-push-action@v5
         with:
-          platforms: linux/ppc64le
+          platforms: ${{ matrix.platform }}
           context: python
           file: python/sklearn.Dockerfile
           push: false
           # Use the cache for Docker layers
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
-          # https://github.com/docker/buildx/issues/1533
+          cache-from: type=gha,mode=max  # Utilize GitHub Actions cache
+          cache-to: type=gha,mode=max
+          # Disable provenance (optional)
           provenance: false
 
   # Push image to GitHub Packages.
   push:
-    # Ensure test job passes before pushing image.
+    # Ensure the test job passes before pushing the image.
     needs: test
-
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64/v8, linux/ppc64le]
     if: github.event_name == 'push'
 
     steps:
@@ -76,48 +80,28 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
       - name: Export version variable
         run: |
           IMAGE_ID=kserve/$IMAGE_NAME
 
-          # Change all uppercase to lowercase
+          # Convert to lowercase and strip prefixes
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
-
-          # Strip git ref prefix from version
           VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
-
-          # Strip "v" prefix from tag name
           [ "$VERSION" == "master" ] && VERSION=latest
 
           echo VERSION=$VERSION >> $GITHUB_ENV
           echo IMAGE_ID=$IMAGE_ID >> $GITHUB_ENV
 
-      # Cache Docker layers before push
-      - name: Cache Docker layers
-        uses: actions/cache@v3
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-docker-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-docker-
-
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          platforms: linux/ppc64le
+          platforms: ${{ matrix.platform }}
           context: python
           file: python/sklearn.Dockerfile
           push: true
           tags: ${{ env.IMAGE_ID }}:${{ env.VERSION }}
-          # Use the cache for Docker layers
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
-          # https://github.com/docker/buildx/issues/1533
+          cache-from: type=gha,mode=max  # Utilize GitHub Actions cache
+          cache-to: type=gha,mode=max
+          # Disable provenance (optional)
           provenance: false
 
