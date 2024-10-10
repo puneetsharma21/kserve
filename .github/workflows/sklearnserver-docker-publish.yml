@@ -2,17 +2,18 @@ name: Sklearn Server Docker Publisher
 
 on:
   push:
-    # Publish `master` as Docker `latest` image.
     branches:
       - master
-      - sklearn-runtime-matrix-cache
-
-    # Publish `v1.2.3` tags as releases.
+      - sklearn-runtime-schedule-retry-on-failure
     tags:
       - v*
-
-  # Run tests for any PRs.
   pull_request:
+  workflow_run:
+    workflows: ["Sklearn Server Docker Publisher"]
+    types:
+      - completed
+  schedule:
+    - cron: '*/15 * * * *' # Runs every 15 minutes
 
 env:
   IMAGE_NAME: sklearnserver
@@ -22,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Run tests.
+  # Main Test job
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -38,6 +39,16 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry/cache
+            ~/.cache/pypoetry/artifacts
+          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+
       - name: Run tests
         uses: docker/build-push-action@v5
         with:
@@ -45,22 +56,59 @@ jobs:
           context: python
           file: python/sklearn.Dockerfile
           push: false
-          # Use the cache for Docker layers
-          cache-from: type=gha,mode=max  # Utilize GitHub Actions cache
+          cache-from: type=gha,mode=max
           cache-to: type=gha,mode=max
-          # Disable provenance (optional)
+          provenance: false
+
+    timeout-minutes: 120 # Set the time limit for each job
+    continue-on-error: true
+
+  retry:
+    runs-on: ubuntu-latest
+    if: ${{ failure() && github.event.workflow_run.conclusion == 'timed_out' }}
+    needs: test
+    steps:
+      - name: Retry failed job due to timeout
+        run: echo "Retrying job due to timeout failure..."
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry/cache
+            ~/.cache/pypoetry/artifacts
+          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+
+      - name: Run tests again
+        uses: docker/build-push-action@v5
+        with:
+          platforms: ${{ matrix.platform }}
+          context: python
+          file: python/sklearn.Dockerfile
+          push: false
+          cache-from: type=gha,mode=max
+          cache-to: type=gha,mode=max
           provenance: false
 
   # Push image to GitHub Packages.
   push:
-    # Ensure the test job passes before pushing the image.
     needs: test
     runs-on: ubuntu-latest
     strategy:
       matrix:
         platform: [linux/amd64, linux/arm64/v8, linux/ppc64le]
-    if: github.event_name == 'push'
-
+    if: github.event_name == 'push' && !cancelled()
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -74,12 +122,9 @@ jobs:
       - name: Export version variable
         run: |
           IMAGE_ID=kserve/$IMAGE_NAME
-
-          # Convert to lowercase and strip prefixes
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
           VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
           [ "$VERSION" == "master" ] && VERSION=latest
-
           echo VERSION=$VERSION >> $GITHUB_ENV
           echo IMAGE_ID=$IMAGE_ID >> $GITHUB_ENV
 
@@ -91,8 +136,12 @@ jobs:
           file: python/sklearn.Dockerfile
           push: true
           tags: ${{ env.IMAGE_ID }}:${{ env.VERSION }}
-          cache-from: type=gha,mode=max  # Utilize GitHub Actions cache
+          cache-from: type=gha,mode=max
           cache-to: type=gha,mode=max
-          # Disable provenance (optional)
           provenance: false
+
+      - name: Clear cache after successful build
+        if: success()
+        run: |
+          rm -rf ~/.cache/pypoetry/cache ~/.cache/pypoetry/artifacts
 
