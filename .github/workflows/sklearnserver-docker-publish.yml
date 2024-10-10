@@ -56,16 +56,16 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
-    timeout-minutes: 120 # Set the time limit for each job
+    timeout-minutes: 10 # Set the time limit for each job
     continue-on-error: true
 
   retry:
     runs-on: ubuntu-latest
-    if: ${{ failure() && github.event_name == 'push' }}
+    if: ${{ needs.test.result == 'failure' || needs.test.result == 'cancelled' }}
     needs: test
     steps:
-      - name: Retry failed job due to timeout
-        run: echo "Retrying job due to timeout failure..."
+      - name: Retry failed job due to timeout or cancellation
+        run: echo "Retrying job due to timeout failure or cancellation..."
 
       - name: Checkout source
         uses: actions/checkout@v4
@@ -137,7 +137,7 @@ jobs:
           provenance: false
 
       - name: Clear cache after successful build
-        if: success()
+        if: success() && needs.push.result == 'success'
         run: |
           rm -rf ~/.cache/pypoetry/cache ~/.cache/pypoetry/artifacts
 
