@@ -100,5 +100,7 @@ jobs:
     needs: [test, retry]
     steps:
       - name: Log test result
-        run: echo "Test job result: ${{ needs.test.result }}"
+        run: |
+          echo "Test job result: ${{ needs.test.result }}"
+          echo "Retry job result: ${{ needs.retry.result }}"
 
