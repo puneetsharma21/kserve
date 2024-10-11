@@ -8,8 +8,6 @@ on:
     tags:
       - v*
   pull_request:
-  schedule:
-    - cron: '*/15 * * * *' # Runs every 15 minutes
 
 env:
   IMAGE_NAME: sklearnserver
@@ -56,13 +54,12 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
-    timeout-minutes: 10 # Set the time limit for each job
-    continue-on-error: true
+    timeout-minutes: 10 # Time limit for each job
 
   retry:
     runs-on: ubuntu-latest
-    if: ${{ needs.test.result == 'failure' || needs.test.result == 'cancelled' }}
     needs: test
+    if: ${{ needs.test.result == 'failure' || needs.test.result == 'cancelled' }}  # Retry only on failure or cancellation (due to timeout)
     steps:
       - name: Retry failed job due to timeout or cancellation
         run: echo "Retrying job due to timeout failure or cancellation..."
@@ -97,47 +94,11 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
-  # Push image to GitHub Packages.
-  push:
-    needs: test
+  # Log the test result (always executes)
+  log-result:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        platform: [linux/amd64, linux/arm64/v8, linux/ppc64le]
-    if: github.event_name == 'push' && !cancelled()
+    needs: [test, retry]
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Export version variable
-        run: |
-          IMAGE_ID=kserve/$IMAGE_NAME
-          IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
-          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
-          [ "$VERSION" == "master" ] && VERSION=latest
-          echo VERSION=$VERSION >> $GITHUB_ENV
-          echo IMAGE_ID=$IMAGE_ID >> $GITHUB_ENV
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          platforms: ${{ matrix.platform }}
-          context: python
-          file: python/sklearn.Dockerfile
-          push: true
-          tags: ${{ env.IMAGE_ID }}:${{ env.VERSION }}
-          cache-from: type=gha,mode=max
-          cache-to: type=gha,mode=max
-          provenance: false
-
-      - name: Clear cache after successful build
-        if: success() && needs.push.result == 'success'
-        run: |
-          rm -rf ~/.cache/pypoetry/cache ~/.cache/pypoetry/artifacts
+      - name: Log test result
+        run: echo "Test job result: ${{ needs.test.result }}"
 
