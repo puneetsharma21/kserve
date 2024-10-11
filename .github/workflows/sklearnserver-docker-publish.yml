@@ -59,7 +59,7 @@ jobs:
   retry:
     runs-on: ubuntu-latest
     needs: test
-    if: ${{ needs.test.result == 'failure' || needs.test.result == 'cancelled' }}  # Retry only on failure or cancellation (due to timeout)
+    if: ${{ needs.test.result != 'success' }}  # Retry if the test job did not succeed
     steps:
       - name: Retry failed job due to timeout or cancellation
         run: echo "Retrying job due to timeout failure or cancellation..."
