@@ -35,6 +35,7 @@ jobs:
 
       # Cache Docker layers from previous runs
       - name: Restore Docker Cache
+        id: cache  # Give an ID to reference later
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
@@ -54,6 +55,14 @@ jobs:
           cache-from: type=gha,src=/tmp/.buildx-cache
           cache-to: type=gha,dest=/tmp/.buildx-cache,mode=max
           provenance: false
+
+      # Save cache after running tests, even if it fails
+      - name: Save Docker Cache
+        if: ${{ always() }}  # Always run this step
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-docker-${{ matrix.platform }}-${{ hashFiles('python/sklearn.Dockerfile') }}
 
     timeout-minutes: 20  # timeout for the test job
 
