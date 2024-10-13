@@ -71,9 +71,11 @@ jobs:
   retry:
     runs-on: ubuntu-latest
     needs: log-result
+    if: ${{ always() }} 
     strategy:
       matrix:
         platform: [linux/ppc64le]  # Only retry for linux/ppc64le
+    timeout-minutes: 20  # Set timeout for the retry job
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
