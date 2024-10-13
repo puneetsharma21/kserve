@@ -23,6 +23,8 @@ jobs:
     strategy:
       matrix:
         platform: [linux/amd64, linux/arm64/v8, linux/ppc64le]
+    outputs:
+      ppc64le_failed: ${{ steps.set-failure-output.outputs.is_ppc64le_failed }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -55,7 +57,17 @@ jobs:
           cache-to: type=gha,dest=/tmp/.buildx-cache,mode=max
           provenance: false
 
-    timeout-minutes: 20  #  timeout for the test job
+      # Set output to track if tests on linux/ppc64le failed
+      - name: Set failure output for linux/ppc64le
+        id: set-failure-output
+        run: |
+          if [[ "${{ matrix.platform }}" == "linux/ppc64le" && "${{ steps.run_tests.outcome }}" == "failure" ]]; then
+            echo "is_ppc64le_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_ppc64le_failed=false" >> $GITHUB_OUTPUT
+          fi
+
+    timeout-minutes: 20  # timeout for the test job
 
   # Log the test result after the test job
   log-result:
@@ -65,16 +77,13 @@ jobs:
     steps:
       - name: Log test result
         run: |
-          echo "Test job result: failure"
+          echo "Test job result: ${{ needs.test.result }}"
 
-  # Retry job that executes if the test job fails or is canceled for linux/ppc64le
+  # Retry job that executes if the test job fails for linux/ppc64le
   retry:
     runs-on: ubuntu-latest
     needs: test
-    if: ${{ failure() && matrix.platform == 'linux/ppc64le' }}  # Run retry only on failure and for ppc64le
-    strategy:
-      matrix:
-        platform: [linux/ppc64le]  # Only retry for linux/ppc64le
+    if: ${{ needs.test.outputs.ppc64le_failed == 'true' }}  # Run retry only if linux/ppc64le failed
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -90,21 +99,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-docker-${{ matrix.platform }}-${{ hashFiles('python/sklearn.Dockerfile') }}
+          key: ${{ runner.os }}-docker-${{ hashFiles('python/sklearn.Dockerfile') }}
           restore-keys: |
-            ${{ runner.os }}-docker-${{ matrix.platform }}-
+            ${{ runner.os }}-docker-
 
       # Run retry tests using Docker Buildx and cached layers
       - name: Run tests again for ppc64le
         uses: docker/build-push-action@v5
         with:
-          platforms: ${{ matrix.platform }}
+          platforms: linux/ppc64le
           context: python
           file: python/sklearn.Dockerfile
           push: false
           cache-from: type=gha,src=/tmp/.buildx-cache
           cache-to: type=gha,dest=/tmp/.buildx-cache,mode=max
           provenance: false
-
-
 
