@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# For debugging purpose: The KServe webhook is failing randomly in the GH Actions environment. This is to check if the webhook cert is ready at 
+# the time of failure. Once the issue is resolved, the following line can be removed.
+kubectl describe cert -n kserve serving-cert
+
 sleep 10
 echo "::group::Free Space"
 df -hT
@@ -28,6 +32,18 @@ echo "::endgroup::"
 
 echo "::group::Kserve Controller Logs"
 kubectl logs -l control-plane=kserve-controller-manager -n kserve -c manager --tail -1
+echo "::endgroup::"
+
+echo "::group::Kserve ModelCache Controller Logs"
+kubectl logs -l control-plane=kserve-localmodel-controller-manager -n kserve -c manager --tail -1
+echo "::endgroup::"
+
+echo "::group::Kserve ModelCache Agent Logs"
+for pod in $(kubectl get pods -l control-plane=kserve-localmodelnode-agent -o jsonpath='{.items[*].metadata.name}' -n kserve); do
+    echo "=====================================  Logs for modelcache agent: $pod  ========================================="
+    kubectl logs "$pod" -c manager -n kserve --tail -1
+    echo "================================================================================================================"
+done
 echo "::endgroup::"
 
 echo "::group::Predictor Pod logs"

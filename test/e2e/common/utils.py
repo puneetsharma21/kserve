@@ -309,6 +309,24 @@ def generate(
     version=constants.KSERVE_V1BETA1_VERSION,
     chat_completions=True,
 ):
+    url_suffix = "v1/chat/completions" if chat_completions else "v1/completions"
+    return _openai_request(service_name, input_json, version, url_suffix)
+
+
+def embed(
+    service_name,
+    input_json,
+    version=constants.KSERVE_V1BETA1_VERSION,
+):
+    return _openai_request(service_name, input_json, version, "v1/embeddings")
+
+
+def _openai_request(
+    service_name,
+    input_json,
+    version=constants.KSERVE_V1BETA1_VERSION,
+    url_suffix="",
+):
     with open(input_json) as json_file:
         data = json.load(json_file)
 
@@ -323,10 +341,7 @@ def generate(
         scheme, cluster_ip, host, path = get_isvc_endpoint(isvc)
         headers = {"Host": host, "Content-Type": "application/json"}
 
-        if chat_completions:
-            url = f"{scheme}://{cluster_ip}{path}/openai/v1/chat/completions"
-        else:
-            url = f"{scheme}://{cluster_ip}{path}/openai/v1/completions"
+        url = f"{scheme}://{cluster_ip}{path}/openai/{url_suffix}"
         logger.info("Sending Header = %s", headers)
         logger.info("Sending url = %s", url)
         logger.info("Sending request data: %s", data)
@@ -341,3 +356,22 @@ def generate(
             return preds
         else:
             response.raise_for_status()
+
+
+def is_model_ready(
+    rest_client, service_name, model_name, version=constants.KSERVE_V1BETA1_VERSION
+):
+    kfs_client = KServeClient(
+        config_file=os.environ.get("KUBECONFIG", "~/.kube/config")
+    )
+    isvc = kfs_client.get(
+        service_name,
+        namespace=KSERVE_TEST_NAMESPACE,
+        version=version,
+    )
+    scheme, cluster_ip, host, path = get_isvc_endpoint(isvc)
+    if model_name is None:
+        model_name = service_name
+    base_url = f"{scheme}://{cluster_ip}{path}"
+    headers = {"Host": host}
+    return rest_client.is_model_ready(base_url, model_name, headers=headers)

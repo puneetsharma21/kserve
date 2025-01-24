@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
@@ -38,7 +39,9 @@ import (
 	knservingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/yaml"
 
 	v1alpha1api "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	v1beta1api "github.com/kserve/kserve/pkg/apis/serving/v1beta1"
@@ -57,7 +60,7 @@ import (
 // +kubebuilder:rbac:groups=serving.kserve.io,resources=clusterservingruntimes;clusterservingruntimes/finalizers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=serving.kserve.io,resources=clusterservingruntimes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=serving.kserve.io,resources=clusterstoragecontainers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=serving.kserve.io,resources=clusterlocalmodels,verbs=get;list
+// +kubebuilder:rbac:groups=serving.kserve.io,resources=localmodelcaches,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=serving.kserve.io,resources=inferenceservices/status,verbs=get;update;patch
@@ -107,9 +110,15 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 		return reconcile.Result{}, err
 	}
+
+	isvcConfig, err := v1beta1api.NewInferenceServicesConfig(r.Clientset)
+	if err != nil {
+		return reconcile.Result{}, errors.Wrapf(err, "fails to create InferenceServicesConfig")
+	}
+
 	// get annotations from isvc
 	annotations := utils.Filter(isvc.Annotations, func(key string) bool {
-		return !utils.Includes(constants.ServiceAnnotationDisallowedList, key)
+		return !utils.Includes(isvcConfig.ServiceAnnotationDisallowedList, key)
 	})
 
 	deployConfig, err := v1beta1api.NewDeployConfig(r.Clientset)
@@ -139,15 +148,17 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// The object is not being deleted, so if it does not have our finalizer,
 		// then lets add the finalizer and update the object. This is equivalent
 		// registering our finalizer.
-		if !utils.Includes(isvc.ObjectMeta.Finalizers, finalizerName) {
-			isvc.ObjectMeta.Finalizers = append(isvc.ObjectMeta.Finalizers, finalizerName)
-			if err := r.Update(context.Background(), isvc); err != nil {
+		if !controllerutil.ContainsFinalizer(isvc, finalizerName) {
+			controllerutil.AddFinalizer(isvc, finalizerName)
+			patchYaml := "metadata:\n  finalizers: [" + strings.Join(isvc.ObjectMeta.Finalizers, ",") + "]"
+			patchJson, _ := yaml.YAMLToJSON([]byte(patchYaml))
+			if err := r.Patch(ctx, isvc, client.RawPatch(types.MergePatchType, patchJson)); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
 	} else {
 		// The object is being deleted
-		if utils.Includes(isvc.ObjectMeta.Finalizers, finalizerName) {
+		if controllerutil.ContainsFinalizer(isvc, finalizerName) {
 			// our finalizer is present, so lets handle any external dependency
 			if err := r.deleteExternalResources(isvc); err != nil {
 				// if fail to delete the external dependency here, return with error
@@ -156,8 +167,10 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			}
 
 			// remove our finalizer from the list and update it.
-			isvc.ObjectMeta.Finalizers = utils.RemoveString(isvc.ObjectMeta.Finalizers, finalizerName)
-			if err := r.Update(context.Background(), isvc); err != nil {
+			controllerutil.RemoveFinalizer(isvc, finalizerName)
+			patchYaml := "metadata:\n  finalizers: [" + strings.Join(isvc.ObjectMeta.Finalizers, ",") + "]"
+			patchJson, _ := yaml.YAMLToJSON([]byte(patchYaml))
+			if err := r.Patch(ctx, isvc, client.RawPatch(types.MergePatchType, patchJson)); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
@@ -182,10 +195,6 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Setup reconcilers
 	r.Log.Info("Reconciling inference service", "apiVersion", isvc.APIVersion, "isvc", isvc.Name)
-	isvcConfig, err := v1beta1api.NewInferenceServicesConfig(r.Clientset)
-	if err != nil {
-		return reconcile.Result{}, errors.Wrapf(err, "fails to create InferenceServicesConfig")
-	}
 
 	// Reconcile cabundleConfigMap
 	caBundleConfigMapReconciler := cabundleconfigmap.NewCaBundleConfigMapReconciler(r.Client, r.Clientset, r.Scheme)
@@ -238,7 +247,7 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// check raw deployment
 	if deploymentMode == constants.RawDeployment {
-		reconciler, err := ingress.NewRawIngressReconciler(r.Client, r.Scheme, ingressConfig)
+		reconciler, err := ingress.NewRawIngressReconciler(r.Client, r.Scheme, ingressConfig, isvcConfig)
 		if err != nil {
 			return reconcile.Result{}, errors.Wrapf(err, "fails to reconcile ingress")
 		}
@@ -246,7 +255,7 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return reconcile.Result{}, errors.Wrapf(err, "fails to reconcile ingress")
 		}
 	} else {
-		reconciler := ingress.NewIngressReconciler(r.Client, r.Clientset, r.Scheme, ingressConfig)
+		reconciler := ingress.NewIngressReconciler(r.Client, r.Clientset, r.Scheme, ingressConfig, isvcConfig)
 		r.Log.Info("Reconciling ingress for inference service", "isvc", isvc.Name)
 		if err := reconciler.Reconcile(isvc); err != nil {
 			return reconcile.Result{}, errors.Wrapf(err, "fails to reconcile ingress")
