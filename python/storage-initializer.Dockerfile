@@ -18,6 +18,9 @@ ARG POETRY_HOME=/opt/poetry
 ARG POETRY_VERSION=1.8.3
 ARG CARGO_HOME=/opt/.cargo/
 
+# Verify the variables are set correctly
+RUN echo "ARTIFACTORY_USER=${ARTIFACTORY_USER}" && echo "ARTIFACTORY_TOKEN=${ARTIFACTORY_TOKEN}"
+
 # Install necessary dependencies for building packages for ppc64le and other architecture-specific setup
 RUN apt-get update && apt-get install -y --no-install-recommends python3-dev build-essential && \
     if [ "$(uname -m)" = "ppc64le" ]; then \
@@ -65,7 +68,7 @@ RUN cd kserve && \
     cat ~/.config/pypoetry/config.toml && \
     poetry config --list && \
     if [ $(uname -m) = "ppc64le" ]; then \
-        GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=true; \
+        export GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=true; \
     fi && \
     poetry install --no-root --no-interaction --no-cache --extras "storage" -vvv
 
